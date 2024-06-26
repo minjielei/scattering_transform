@@ -38,7 +38,8 @@ def synthesis(
     N_ensemble=1,
     reference_P00=None,
     pseudo_coef=1,
-    remove_edge=False
+    remove_edge=False,
+    weight=None
 ):
     '''
 the estimator_name can be 's_mean', 's_mean_iso', 's_cov', 's_cov_iso', 'alpha_cov', 
@@ -109,9 +110,9 @@ Use * or + to connect more than one condition.
                 st_calc.add_ref(ref=image_ref)
 
         if estimator_name=='s_mean_iso':
-            func_s = lambda x: st_calc.scattering_coef(x, flatten=True)['for_synthesis_iso']
+            func_s = lambda x: st_calc.scattering_coef(x)['for_synthesis_iso']
         if estimator_name=='s_mean':
-            func_s = lambda x: st_calc.scattering_coef(x, flatten=True)['for_synthesis']
+            func_s = lambda x: st_calc.scattering_coef(x)['for_synthesis']
         if 's_cov_func' in estimator_name:
             def func_s(image):
                 s_cov_set = st_calc.scattering_cov(
@@ -156,7 +157,7 @@ Use * or + to connect more than one condition.
             def func_s(image):
                 result = st_calc.scattering_cov_2fields(
                     image, image_b, use_ref=True, if_large_batch=if_large_batch, C11_criteria=C11_criteria,
-                    normalization=normalization, pseudo_coef=pseudo_coef, remove_edge=remove_edge
+                    normalization=normalization, remove_edge=remove_edge
                 )
                 select =(result['index_for_synthesis_iso'][0]!=1) * (result['index_for_synthesis_iso'][0]!=3) *\
                         (result['index_for_synthesis_iso'][0]!=7) * (result['index_for_synthesis_iso'][0]!=11)*\
@@ -166,7 +167,7 @@ Use * or + to connect more than one condition.
             def func_s(image):
                 result = st_calc.scattering_cov_2fields(
                     image, image_b, use_ref=True, if_large_batch=if_large_batch, C11_criteria=C11_criteria,
-                    normalization=normalization, pseudo_coef=pseudo_coef, remove_edge=remove_edge
+                    normalization=normalization, remove_edge=remove_edge
                 )
                 select =(result['index_for_synthesis'][0]!=1) * (result['index_for_synthesis'][0]!=3) *\
                         (result['index_for_synthesis'][0]!=7) * (result['index_for_synthesis'][0]!=11) *\
@@ -220,7 +221,7 @@ Use * or + to connect more than one condition.
         mode=mode, 
         optim_algorithm=optim_algorithm, steps=steps, learning_rate=learning_rate,
         device=device, precision=precision, print_each_step=print_each_step,
-        Fourier=Fourier, ensemble=ensemble,
+        Fourier=Fourier, ensemble=ensemble, weight = weight
     )
     return image_syn
 
@@ -272,7 +273,7 @@ def synthesis_general(
     target, image_init, estimator_function, loss_function, 
     mode='image', optim_algorithm='LBFGS', steps=100, learning_rate=0.5,
     device='gpu', precision='single', print_each_step=False, Fourier=False,
-    ensemble=False,
+    ensemble=False, weight = 1
 ):
     # define parameters
     N_image = image_init.shape[0]
@@ -284,6 +285,8 @@ def synthesis_general(
         target = torch.from_numpy(target)
     if type(image_init)==np.ndarray:
         image_init = torch.from_numpy(image_init)
+    if type(weight)==np.ndarray:
+        weight = torch.from_numpy(weight)
     if precision=='double':
         target = target.type(torch.DoubleTensor)
         image_init = image_init.type(torch.DoubleTensor)
@@ -293,6 +296,7 @@ def synthesis_general(
     if device=='gpu':
         target     = target.cuda()
         image_init = image_init.cuda()
+        weight = weight.cuda()
     
     # calculate statistics for target images
     if mode=='image':
@@ -332,14 +336,14 @@ def synthesis_general(
     elif optim_algorithm =='LBFGS':
         optimizer = torch.optim.LBFGS(image_model.parameters(), lr=learning_rate, 
             max_iter=steps, max_eval=None, 
-            tolerance_grad=1e-19, tolerance_change=1e-19, 
+            tolerance_grad=1e-9, tolerance_change=1e-9, 
             history_size=min(steps//2, 150), line_search_fn=None
         )
     
     def closure():
         optimizer.zero_grad()
         loss = 0
-        estimator_model = estimator_function(image_model.image)
+        estimator_model = estimator_function(image_model.image*weight)
         if ensemble: loss = loss_function(estimator_model.mean(0), estimator_target.mean(0))
         else: loss = loss_function(estimator_model, estimator_target)
         if print_each_step:
@@ -368,16 +372,16 @@ def synthesis_general(
     if not ensemble:
         print(
             'max residual: ', 
-            np.max((estimator_function(image_model.image) - estimator_target).abs().detach().cpu().numpy()),
+            np.max((estimator_function(image_model.image*weight) - estimator_target).abs().detach().cpu().numpy()),
             ', mean residual: ', 
-            np.mean((estimator_function(image_model.image) - estimator_target).abs().detach().cpu().numpy()),
+            np.mean((estimator_function(image_model.image*weight) - estimator_target).abs().detach().cpu().numpy()),
         )
     else:
         print(
             'max residual: ', 
-            np.max((estimator_function(image_model.image).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
+            np.max((estimator_function(image_model.image*weight).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
             ', mean residual: ', 
-            np.mean((estimator_function(image_model.image).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
+            np.mean((estimator_function(image_model.image*weight).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
         )
     if optim_algorithm =='LBFGS':
         i=0
@@ -389,16 +393,16 @@ def synthesis_general(
     if not ensemble:
         print(
             'max residual: ', 
-            np.max((estimator_function(image_model.image) - estimator_target).abs().detach().cpu().numpy()),
+            np.max((estimator_function(image_model.image*weight) - estimator_target).abs().detach().cpu().numpy()),
             ', mean residual: ', 
-            np.mean((estimator_function(image_model.image) - estimator_target).abs().detach().cpu().numpy()),
+            np.mean((estimator_function(image_model.image*weight) - estimator_target).abs().detach().cpu().numpy()),
         )
     else:
         print(
             'max residual: ', 
-            np.max((estimator_function(image_model.image).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
+            np.max((estimator_function(image_model.image*weight).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
             ', mean residual: ', 
-            np.mean((estimator_function(image_model.image).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
+            np.mean((estimator_function(image_model.image*weight).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
         )
     t_end = time.time()
     print('time used: ', t_end - t_start, 's')
@@ -849,3 +853,17 @@ def reduced_ST(S, J, L):
     j2 = (np.arange(J)[None,:] + np.zeros(J)[:,None]).flatten()
     j1j2 = np.concatenate((j1[None, select], j2[None, select]), axis=0)
     return s0, s1, s21, s22, s2, j1j2
+
+# create cosine apodization mask
+def cosine_window(N): 
+    # make a 2d coordinate system
+    ones = np.ones(N)
+    inds  = (np.arange(N)+.5 - N/2.)/N *np.pi ## eg runs from -pi/2 to pi/2
+    X = np.outer(ones, inds)
+    Y = np.transpose(X)
+  
+    # make a window map
+    window_map = np.cos(X) * np.cos(Y)
+   
+    # return the window map
+    return window_map

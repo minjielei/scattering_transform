@@ -33,17 +33,19 @@ def init_cosine_projector(s_cov, idx_info):
     cov_type, j1_s, a_s, b_s, l1_s, l1p_s, l2_s = idx_info.T
     idx_info_no_j1_l = np.stack([cov_type, l1_s, l1p_s, l2_s, a_s, b_s]).T.tolist()
     
-    idx_info_no_j1_l = list(set([tuple(row) for row in idx_info_no_j1_l]))
+    # idx_info_no_j1_l = list(set([tuple(row) for row in idx_info_no_j1_l]))
     
-#     idx_info_no_j1_l = np.array(idx_info_no_j1_l)
-#     _, idx = np.unique(idx_info_no_j1_l, axis=0, return_index=True)
-#     idx_info_no_j1_l = idx_info_no_j1_l[np.sort(idx)]
+    idx_info_no_j1_l = np.array(idx_info_no_j1_l)
+    _, idx = np.unique(idx_info_no_j1_l, axis=0, return_index=True)
+    idx_info_no_j1_l = idx_info_no_j1_l[np.sort(idx)]
+    # print(idx_info_no_j1_l)
 
     J = a_s.max() + 1  # TODO. Hack, should infer better the value of J
 
     proj_l = []
     idx_info_out_l = []
     for (c_type, l1, l1p, l2, a, b) in idx_info_no_j1_l:
+        l1, l1p, l2, a, b = int(l1), int(l1p), int(l2), int(a), int(b)
         idx = (cov_type == c_type) & (l1_s == l1) & (l1p_s == l1p) & (l2_s == l2) & (a_s == a) & (b_s == b)
 
         if c_type == 'mean':
