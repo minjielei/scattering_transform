@@ -39,7 +39,8 @@ def synthesis(
     reference_P00=None,
     pseudo_coef=1,
     remove_edge=False,
-    weight=None
+    weight=None,
+    loss_threshold=0.02,
 ):
     '''
 the estimator_name can be 's_mean', 's_mean_iso', 's_cov', 's_cov_iso', 'alpha_cov', 
@@ -85,7 +86,7 @@ Use * or + to connect more than one condition.
     
     # define calculator and estimator function
     if 's' in estimator_name:
-        st_calc = Scattering2d(M, N, J, L, device, wavelets, l_oversampling=l_oversampling, frequency_factor=frequency_factor)
+        st_calc = Scattering2d(M, N, J, L, device, wavelets, l_oversampling=l_oversampling, frequency_factor=frequency_factor, weight=weight)
         if mode=='image':
             if '2fields' not in estimator_name: 
                 st_calc.add_ref(ref=target)
@@ -221,7 +222,7 @@ Use * or + to connect more than one condition.
         mode=mode, 
         optim_algorithm=optim_algorithm, steps=steps, learning_rate=learning_rate,
         device=device, precision=precision, print_each_step=print_each_step,
-        Fourier=Fourier, ensemble=ensemble, weight = weight
+        Fourier=Fourier, ensemble=ensemble, weight = weight, loss_threshold=loss_threshold
     )
     return image_syn
 
@@ -273,7 +274,7 @@ def synthesis_general(
     target, image_init, estimator_function, loss_function, 
     mode='image', optim_algorithm='LBFGS', steps=100, learning_rate=0.5,
     device='gpu', precision='single', print_each_step=False, Fourier=False,
-    ensemble=False, weight = 1
+    ensemble=False, weight = 1, loss_threshold=0.02
 ):
     # define parameters
     N_image = image_init.shape[0]
@@ -335,7 +336,7 @@ def synthesis_general(
         optimizer = torch.optim.Adamax(image_model.parameters(), lr=learning_rate)
     elif optim_algorithm =='LBFGS':
         optimizer = torch.optim.LBFGS(image_model.parameters(), lr=learning_rate, 
-            max_iter=steps, max_eval=None, 
+            max_iter=1, max_eval=None, 
             tolerance_grad=1e-9, tolerance_change=1e-9, 
             history_size=min(steps//2, 150), line_search_fn=None
         )
@@ -343,14 +344,15 @@ def synthesis_general(
     def closure():
         optimizer.zero_grad()
         loss = 0
-        estimator_model = estimator_function(image_model.image*weight)
+        estimator_model = estimator_function(image_model.image)
         if ensemble: loss = loss_function(estimator_model.mean(0), estimator_target.mean(0))
         else: loss = loss_function(estimator_model, estimator_target)
         if print_each_step:
-            if optim_algorithm=='LBFGS' or (optim_algorithm!='LBFGS' and (i%100==0 or i%100==-1)):
+            if (i%10==0 or i%10==-1):
                 if not ensemble:
                     print((estimator_model-estimator_target).abs().max())
                     print(
+                        'Step:', i,
                         'max residual: ', 
                         np.max((estimator_model - estimator_target).abs().detach().cpu().numpy()),
                         ', mean residual: ', 
@@ -359,6 +361,7 @@ def synthesis_general(
                 else:
                     print((estimator_model.mean(0)-estimator_target.mean(0)).abs().max())
                     print(
+                        'Step: ', i,
                         'max residual: ', 
                         np.max((estimator_model.mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
                         ', mean residual: ', 
@@ -372,20 +375,20 @@ def synthesis_general(
     if not ensemble:
         print(
             'max residual: ', 
-            np.max((estimator_function(image_model.image*weight) - estimator_target).abs().detach().cpu().numpy()),
+            np.max((estimator_function(image_model.image) - estimator_target).abs().detach().cpu().numpy()),
             ', mean residual: ', 
-            np.mean((estimator_function(image_model.image*weight) - estimator_target).abs().detach().cpu().numpy()),
+            np.mean((estimator_function(image_model.image) - estimator_target).abs().detach().cpu().numpy()),
         )
     else:
         print(
             'max residual: ', 
-            np.max((estimator_function(image_model.image*weight).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
+            np.max((estimator_function(image_model.image).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
             ', mean residual: ', 
-            np.mean((estimator_function(image_model.image*weight).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
+            np.mean((estimator_function(image_model.image).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
         )
     if optim_algorithm =='LBFGS':
-        i=0
-        optimizer.step(closure)
+        for i in range(steps):
+            optimizer.step(closure)
     else:
         for i in range(steps):
             # print('step: ', i)
@@ -393,16 +396,16 @@ def synthesis_general(
     if not ensemble:
         print(
             'max residual: ', 
-            np.max((estimator_function(image_model.image*weight) - estimator_target).abs().detach().cpu().numpy()),
+            np.max((estimator_function(image_model.image) - estimator_target).abs().detach().cpu().numpy()),
             ', mean residual: ', 
-            np.mean((estimator_function(image_model.image*weight) - estimator_target).abs().detach().cpu().numpy()),
+            np.mean((estimator_function(image_model.image) - estimator_target).abs().detach().cpu().numpy()),
         )
     else:
         print(
             'max residual: ', 
-            np.max((estimator_function(image_model.image*weight).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
+            np.max((estimator_function(image_model.image).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
             ', mean residual: ', 
-            np.mean((estimator_function(image_model.image*weight).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
+            np.mean((estimator_function(image_model.image).mean(0) - estimator_target.mean(0)).abs().detach().cpu().numpy()),
         )
     t_end = time.time()
     print('time used: ', t_end - t_start, 's')
@@ -418,6 +421,12 @@ def whiten(image, overall=False):
         return (image - image.mean()) / image.std()
     else:
         return (image - image.mean((-2,-1))[:,None,None]) / image.std((-2,-1))[:,None,None]
+
+def normalize(image, overall=False):
+    if overall:
+        return image / image.std()
+    else:
+        return image / image.std((-2,-1))[:,None,None]
 
 def filter_radial(img, func, backend='np'):
     M, N = img.shape[-2:]
@@ -729,6 +738,7 @@ def chunk_model(X, st_calc, nchunks, **kwargs):
     partition = np.array_split(np.arange(X.shape[0]), nchunks)
     covs_l = [] 
     covs_l_iso = [] 
+    # cov_l_iso_vae = []
     for part in partition:
         X_here = X[part,:,:]
         
@@ -738,18 +748,39 @@ def chunk_model(X, st_calc, nchunks, **kwargs):
         for key in list(s_cov_here.keys()):
             if key not in [
                 'index_for_synthesis_iso', 'for_synthesis_iso',
-                'index_for_synthesis', 'for_synthesis'
+                'index_for_synthesis', 'for_synthesis', 'for_vae_iso'
             ]:
                 del s_cov_here[key]
-            idx_iso = to_numpy(s_cov_here['index_for_synthesis_iso']).astype(object)
-            cov_iso = s_cov_here['for_synthesis_iso']#.cpu()
-            idx = to_numpy(s_cov_here['index_for_synthesis']).astype(object)
-            cov = s_cov_here['for_synthesis']#.cpu()
+        idx_iso = to_numpy(s_cov_here['index_for_synthesis_iso']).astype(object)
+        cov_iso = s_cov_here['for_synthesis_iso']#.cpu()
+        # cov_iso_vae = s_cov_here['for_vae_iso']#.cpu()
+        idx = to_numpy(s_cov_here['index_for_synthesis']).astype(object)
+        cov = s_cov_here['for_synthesis']#.cpu()
         
         covs_l_iso.append(cov_iso)
+        # cov_l_iso_vae.append(cov_iso_vae)
         covs_l.append(cov)
     s_cov_set = {'index_for_synthesis_iso':idx_iso, 'for_synthesis_iso':torch.cat(covs_l_iso),
              'index_for_synthesis':idx, 'for_synthesis':torch.cat(covs_l)}
+    return s_cov_set
+
+# for large data, scattering computation needs to be chunked to hold on memory
+def chunk_model_simple(X, st_calc, nchunks, **kwargs):
+    partition = np.array_split(np.arange(X.shape[0]), nchunks)
+    s21_l = []
+    s22_l = []
+    for part in partition:
+        X_here = X[part,:,:]
+        
+        s_coef_here = st_calc.scattering_coef_simple(X_here)
+
+        # keep relevent information only
+        s21 = s_coef_here['s21']
+        s22 = s_coef_here['s22']
+        
+        s21_l.append(s21)
+        s22_l.append(s22)
+    s_cov_set = {'s21':torch.cat(s21_l).detach().cpu().numpy(), 's22':torch.cat(s22_l).detach().cpu().numpy()}
     return s_cov_set
 
 # a function that prepares the argument "s_cov_func" to be given to the "synthesis" function
@@ -867,3 +898,33 @@ def cosine_window(N):
    
     # return the window map
     return window_map
+
+class EarlyStopping():
+    """
+    Early stopping to stop the training when the loss does not improve after
+    certain iterations.
+    """
+    def __init__(self, patience=10, min_delta=0):
+        """
+        :param patience: how many epochs to wait before stopping when loss is
+               not improving
+        :param min_delta: minimum difference between new loss and old loss for
+               new loss to be considered as an improvement
+        """
+
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_loss = None
+        self.early_stop = False
+    def __call__(self, loss):
+        if self.best_loss == None:
+            self.best_loss = loss
+        elif self.best_loss - loss > self.min_delta:
+            self.best_loss = loss
+            self.counter = 0
+        elif self.best_loss - loss < self.min_delta:
+            self.counter += 1
+            if self.counter >= self.patience:
+                # print('INFO: Early stopping')
+                self.early_stop = True
